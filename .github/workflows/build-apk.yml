@@ -94,15 +94,24 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           cat "$HOME/.bubblewrap/config.json"
 
-      # 第一次跑时没有 checksum 文件，bubblewrap 会问"要不要重新生成工程"（默认 Y）。
-      # 这里用 printf 预先喂几个 Y：回答"是"，让它把 Android 工程生成出来再编译。
-      # 不用 `yes "" |` 是因为 GitHub 的 bash 开了 pipefail，yes 被 SIGPIPE 杀掉会让整步失败。
+      # 关键一步：先用 `update --skipVersionUpgrade` 把 Android 工程生成出来。
+      # 它会写出 manifest-checksum.txt，而且因为跳过版本升级，不会问 versionName。
+      # 之后 `build` 看到 checksum 就认为工程是最新的，不再问"要不要重新生成"，
+      # 于是整条链路一个交互提问都没有。
+      - name: 生成 Android 工程（免交互）
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'shunlu2026' }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'shunlu2026' }}
+        run: |
+          printf 'Y\nY\n' | bubblewrap update --skipVersionUpgrade
+          ls -l manifest-checksum.txt || true
+
       - name: 编译 APK
         env:
           BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'shunlu2026' }}
           BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'shunlu2026' }}
         run: |
-          printf 'Y\nY\nY\nY\n' | bubblewrap build --skipPwaValidation
+          printf 'Y\nY\n' | bubblewrap build --skipPwaValidation
 
       - name: 列出产物
         if: always()
