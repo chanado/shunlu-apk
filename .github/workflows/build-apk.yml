@@ -76,12 +76,23 @@ jobs:
           fi
           ls -lh android.keystore
 
+      # bubblewrap 在没有配置文件时是"交互式"的，会问 JDK 和 SDK 装在哪；
+      # CI 里没有终端，一提问就以退出码 130 结束。这里提前把两个路径写进配置，
+      # 让它一路不提问直接跑。
+      - name: 写 Bubblewrap 配置（免交互）
+        run: |
+          mkdir -p "$HOME/.bubblewrap"
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}' "$JAVA_HOME" "$ANDROID_SDK_ROOT" > "$HOME/.bubblewrap/config.json"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          cat "$HOME/.bubblewrap/config.json"
+
       - name: 编译 APK
         env:
           BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'shunlu2026' }}
           BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'shunlu2026' }}
         run: |
-          bubblewrap build --skipPwaValidation
+          bubblewrap build --skipPwaValidation < /dev/null
 
       - name: 列出产物
         if: always()
