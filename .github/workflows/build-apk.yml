@@ -45,12 +45,19 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "$CMD/bin" >> "$GITHUB_PATH"
+          # bubblewrap 1.27 用 `<sdk>/tools/bin/sdkmanager` 或 `<sdk>/bin/sdkmanager` 装 build-tools，
+          # 而新 SDK 只有 cmdline-tools/<ver>/bin。这里补一个 bin/ 软链，让两条路都通。
+          mkdir -p "$SDK/bin"
+          ln -sf "$CMD/bin/sdkmanager" "$SDK/bin/sdkmanager"
+          ls -l "$SDK/bin"
           "$CMD/bin/sdkmanager" --version || true
 
+      # 模板工程用 compileSdkVersion 36 / targetSdkVersion 36，
+      # bubblewrap 1.27 还固定要 build-tools;36.1.0，所以两个都装。
       - name: 安装编译所需的 Android 组件
         run: |
           yes | sdkmanager --licenses > /dev/null || true
-          yes | sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          yes | sdkmanager --install "platforms;android-36" "build-tools;36.1.0" "platform-tools"
           sdkmanager --list_installed | sed -n '1,40p' || true
 
       - name: 安装 Bubblewrap
