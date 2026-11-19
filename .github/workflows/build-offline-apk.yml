@@ -1,0 +1,196 @@
+name: Build Offline WebView APK
+
+# 用途：把线上那份 index.html 抓下来，塞进一个极简 Android WebView 壳里，
+# 打成一个「不需要 Chrome、不需要联网」的 APK。
+# 整个 Android 工程都在流水线里现场生成，仓库里只要这一个 yml。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-offline-apk.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 装 Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+
+      # 用 sed 把 heredoc 每行开头的缩进削掉，否则写出来的 XML/Java
+      # 会带着 YAML 的缩进（XML 声明前面有空格会解析失败）。
+      - name: 生成工程骨架
+        run: |
+          mkdir -p app/src/main/java/dev/shunlu/offline
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/drawable
+
+          sed 's/^ *//' > settings.gradle <<'EOF'
+          pluginManagement {
+            repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "shunlu-offline"
+          include ':app'
+          EOF
+
+          sed 's/^ *//' > build.gradle <<'EOF'
+          plugins {
+            id 'com.android.application' version '8.4.0' apply false
+          }
+          EOF
+
+          sed 's/^ *//' > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+
+          sed 's/^ *//' > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+
+          android {
+            namespace 'dev.shunlu.offline'
+            compileSdk 34
+
+            defaultConfig {
+              applicationId "dev.shunlu.offline"
+              minSdk 24
+              targetSdk 34
+              versionCode 1
+              versionName "1.0"
+            }
+
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+
+            buildTypes {
+              release { minifyEnabled false }
+            }
+          }
+
+          dependencies {
+            implementation 'androidx.webkit:webkit:1.11.0'
+          }
+          EOF
+
+          sed 's/^ *//' > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+            <application
+              android:label="顺路捎"
+              android:icon="@drawable/icon"
+              android:allowBackup="true"
+              android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+              <activity
+                android:name=".MainActivity"
+                android:exported="true"
+                android:configChanges="orientation|screenSize|keyboardHidden">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+
+          sed 's/^ *//' > app/src/main/java/dev/shunlu/offline/MainActivity.java <<'EOF'
+          package dev.shunlu.offline;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          import androidx.webkit.WebViewAssetLoader;
+
+          public class MainActivity extends Activity {
+
+            private WebView web;
+
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+              super.onCreate(savedInstanceState);
+
+              WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+                  .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+                  .build();
+
+              web = new WebView(this);
+              WebSettings s = web.getSettings();
+              s.setJavaScriptEnabled(true);
+              s.setDomStorageEnabled(true);
+              s.setDatabaseEnabled(true);
+              s.setSupportZoom(false);
+              s.setBuiltInZoomControls(false);
+              s.setCacheMode(WebSettings.LOAD_DEFAULT);
+
+              web.setBackgroundColor(Color.parseColor("#f6f8fb"));
+              web.setOverScrollMode(View.OVER_SCROLL_NEVER);
+              web.setWebViewClient(new WebViewClient() {
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                  return loader.shouldInterceptRequest(request.getUrl());
+                }
+              });
+
+              setContentView(web);
+              web.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+            }
+
+            @Override
+            public void onBackPressed() {
+              if (web != null && web.canGoBack()) {
+                web.goBack();
+              } else {
+                super.onBackPressed();
+              }
+            }
+          }
+          EOF
+
+          echo "---- 生成的工程 ----"
+          find . -maxdepth 5 \( -name "*.gradle" -o -name "*.java" -o -name "AndroidManifest.xml" -o -name "*.properties" \) | sort
+          head -n 2 app/src/main/AndroidManifest.xml
+
+      - name: 抓取线上页面
+        run: |
+          curl -fsSL "https://shunlu-cr7.pages.dev/index.html" -o app/src/main/assets/index.html
+          curl -fsSL "https://shunlu-cr7.pages.dev/icons/icon-512.png" -o app/src/main/res/drawable/icon.png
+          ls -lh app/src/main/assets/index.html app/src/main/res/drawable/icon.png
+
+      - name: 编译 APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: 列出产物
+        if: always()
+        run: ls -lh app/build/outputs/apk/debug/ || true
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shunlu-offline-apk
+          if-no-files-found: warn
+          path: app/build/outputs/apk/debug/app-debug.apk
