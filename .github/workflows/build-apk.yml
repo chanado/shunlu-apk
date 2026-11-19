@@ -113,6 +113,26 @@ jobs:
         run: |
           printf 'Y\nY\n' | bubblewrap build --skipPwaValidation
 
+      # bubblewrap 自己不产出 assetlinks.json（那是 PWABuilder 才会顺手给的）。
+      # 这里直接用刚才那个 keystore 导出的证书算 SHA-256 指纹，拼出 Digital
+      # Asset Links 需要的文件。指纹必须和签名用的 keystore 完全一致，否则
+      # App 顶部会一直显示地址栏。
+      - name: 生成 assetlinks.json 与密钥信息
+        if: always()
+        env:
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD || 'shunlu2026' }}
+        run: |
+          if [ ! -f android.keystore ]; then echo "没有 keystore，跳过"; exit 0; fi
+          keytool -exportcert -keystore android.keystore -alias android \
+            -storepass "$KS_PASS" -file cert.der
+          FPR="$(openssl x509 -inform der -in cert.der -noout -fingerprint -sha256 \
+            | sed 's/^.*=//' | tr -d '\r')"
+          echo "SHA256 指纹: $FPR"
+          printf '[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"dev.pages.shunlu_cr7.twa","sha256_cert_fingerprints":["%s"]}}]' "$FPR" > assetlinks.json
+          printf 'alias: android\nstorePass/keyPass: %s\nSHA256: %s\n' "$KS_PASS" "$FPR" > signing-key-info.txt
+          cat assetlinks.json
+          cat signing-key-info.txt
+
       - name: 列出产物
         if: always()
         run: |
